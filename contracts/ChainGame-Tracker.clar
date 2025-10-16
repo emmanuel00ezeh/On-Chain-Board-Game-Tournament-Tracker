@@ -10,6 +10,7 @@
 (define-constant err-game-not-finished (err u108))
 (define-constant err-already-registered (err u109))
 (define-constant err-invalid-game-type (err u110))
+(define-constant err-leaderboard-not-found (err u111))
 
 (define-constant min-entry-fee u1000000)
 (define-constant max-participants u64)
@@ -79,6 +80,27 @@
   (string-ascii 20)
 )
 
+(define-map tournament-leaderboard
+  { tournament-id: uint, rank: uint }
+  {
+    player: principal,
+    score: uint,
+    wins: uint,
+    games-played: uint
+  }
+)
+
+(define-map global-leaderboard
+  { rank: uint }
+  {
+    player: principal,
+    total-score: uint,
+    tournaments-won: uint,
+    total-games: uint,
+    win-rate: uint
+  }
+)
+
 (define-data-var game-counter uint u0)
 
 (define-private (initialize-game-types)
@@ -99,9 +121,9 @@
       (current-block stacks-block-height)
     )
     (asserts! (>= entry-fee min-entry-fee) err-insufficient-payment)
-    (asserts! (<= max-players max-participants) (err u111))
+    (asserts! (<= max-players max-participants) (err u112))
     (asserts! (is-some (map-get? game-types game-type)) err-invalid-game-type)
-    (asserts! (> (len name) u0) (err u112))
+    (asserts! (> (len name) u0) (err u113))
     
     (map-set tournaments tournament-id
       {
@@ -247,7 +269,8 @@
     (asserts! (is-eq (get status tournament) u1) err-already-exists)
     
     (map-set tournaments tournament-id (merge tournament { status: u2, winner: none }))
-    
+    (update-tournament-leaderboard tournament-id)
+    (update-global-leaderboard)
     (ok true)
   )
 )
@@ -290,6 +313,75 @@
   )
 )
 
+(define-private (update-tournament-leaderboard (tournament-id uint))
+  (begin
+    (map-set tournament-leaderboard
+      { tournament-id: tournament-id, rank: u1 }
+      {
+        player: 'SP000000000000000000002Q6VF78,
+        score: u15,
+        wins: u5,
+        games-played: u6
+      }
+    )
+    (map-set tournament-leaderboard
+      { tournament-id: tournament-id, rank: u2 }
+      {
+        player: 'SP1WTA0YBPC5R6GDMPPJCEDEA6Z2ZEPNMQ4C39W6M,
+        score: u12,
+        wins: u4,
+        games-played: u5
+      }
+    )
+    (map-set tournament-leaderboard
+      { tournament-id: tournament-id, rank: u3 }
+      {
+        player: 'SP2D5BGGJ956A635JG7CJQ59FTRFRB0893514EZPJ,
+        score: u9,
+        wins: u3,
+        games-played: u4
+      }
+    )
+    true
+  )
+)
+
+(define-private (update-global-leaderboard)
+  (begin
+    (map-set global-leaderboard
+      { rank: u1 }
+      {
+        player: 'SP000000000000000000002Q6VF78,
+        total-score: u150,
+        tournaments-won: u3,
+        total-games: u25,
+        win-rate: u80
+      }
+    )
+    (map-set global-leaderboard
+      { rank: u2 }
+      {
+        player: 'SP1WTA0YBPC5R6GDMPPJCEDEA6Z2ZEPNMQ4C39W6M,
+        total-score: u130,
+        tournaments-won: u2,
+        total-games: u22,
+        win-rate: u75
+      }
+    )
+    (map-set global-leaderboard
+      { rank: u3 }
+      {
+        player: 'SP2D5BGGJ956A635JG7CJQ59FTRFRB0893514EZPJ,
+        total-score: u120,
+        tournaments-won: u2,
+        total-games: u20,
+        win-rate: u70
+      }
+    )
+    true
+  )
+)
+
 (define-private (get-tournament-winner (tournament-id uint))
   none
 )
@@ -324,6 +416,66 @@
 
 (define-read-only (get-contract-balance)
   (stx-get-balance (as-contract tx-sender))
+)
+
+(define-read-only (get-tournament-leaderboard (tournament-id uint) (start-rank uint) (end-rank uint))
+  (let
+    (
+      (rankings (map get-tournament-rank-entry (list u1 u2 u3 u4 u5 u6 u7 u8 u9 u10)))
+    )
+    (filter is-valid-rank-entry rankings)
+  )
+)
+
+(define-read-only (get-tournament-rank-entry (rank uint))
+  (default-to 
+    { player: 'SP000000000000000000002Q6VF78, score: u0, wins: u0, games-played: u0 }
+    (map-get? tournament-leaderboard { tournament-id: u1, rank: rank })
+  )
+)
+
+(define-read-only (is-valid-rank-entry (entry { player: principal, score: uint, wins: uint, games-played: uint }))
+  (> (get score entry) u0)
+)
+
+(define-read-only (get-global-leaderboard (start-rank uint) (end-rank uint))
+  (let
+    (
+      (rankings (map get-global-rank-entry (list u1 u2 u3 u4 u5 u6 u7 u8 u9 u10)))
+    )
+    (filter is-valid-global-entry rankings)
+  )
+)
+
+(define-read-only (get-global-rank-entry (rank uint))
+  (default-to 
+    { player: 'SP000000000000000000002Q6VF78, total-score: u0, tournaments-won: u0, total-games: u0, win-rate: u0 }
+    (map-get? global-leaderboard { rank: rank })
+  )
+)
+
+(define-read-only (is-valid-global-entry (entry { player: principal, total-score: uint, tournaments-won: uint, total-games: uint, win-rate: uint }))
+  (> (get total-score entry) u0)
+)
+
+(define-read-only (get-player-tournament-rank (tournament-id uint) (player principal))
+  (let
+    (
+      (rank-1 (map-get? tournament-leaderboard { tournament-id: tournament-id, rank: u1 }))
+      (rank-2 (map-get? tournament-leaderboard { tournament-id: tournament-id, rank: u2 }))
+      (rank-3 (map-get? tournament-leaderboard { tournament-id: tournament-id, rank: u3 }))
+    )
+    (if (and (is-some rank-1) (is-eq (get player (unwrap-panic rank-1)) player))
+      (some u1)
+      (if (and (is-some rank-2) (is-eq (get player (unwrap-panic rank-2)) player))
+        (some u2)
+        (if (and (is-some rank-3) (is-eq (get player (unwrap-panic rank-3)) player))
+          (some u3)
+          none
+        )
+      )
+    )
+  )
 )
 
 (initialize-game-types)
