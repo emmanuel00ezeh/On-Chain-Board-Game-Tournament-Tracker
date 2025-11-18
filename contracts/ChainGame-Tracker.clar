@@ -11,6 +11,7 @@
 (define-constant err-already-registered (err u109))
 (define-constant err-invalid-game-type (err u110))
 (define-constant err-leaderboard-not-found (err u111))
+(define-constant err-not-registered (err u114))
 
 (define-constant min-entry-fee u1000000)
 (define-constant max-participants u64)
@@ -180,6 +181,30 @@
     )
     
     (update-player-stats tx-sender u1 u0 u0 u0 u0)
+    (ok true)
+  )
+)
+
+(define-public (cancel-registration (tournament-id uint))
+  (let
+    (
+      (tournament (unwrap! (map-get? tournaments tournament-id) err-not-found))
+      (current-block stacks-block-height)
+      (participant-key { tournament-id: tournament-id, player: tx-sender })
+      (participant (unwrap! (map-get? participants participant-key) err-not-registered))
+    )
+    (asserts! (< current-block (get registration-end tournament)) err-tournament-closed)
+    (asserts! (get active participant) err-not-registered)
+    (try! (stx-transfer? (get entry-fee tournament) (as-contract tx-sender) tx-sender))
+    (map-set participants participant-key
+      (merge participant { active: false })
+    )
+    (map-set tournaments tournament-id
+      (merge tournament {
+        current-participants: (- (get current-participants tournament) u1),
+        prize-pool: (- (get prize-pool tournament) (get entry-fee tournament))
+      })
+    )
     (ok true)
   )
 )
