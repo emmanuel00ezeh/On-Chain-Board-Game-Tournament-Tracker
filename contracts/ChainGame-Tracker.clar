@@ -12,6 +12,17 @@
 (define-constant err-invalid-game-type (err u110))
 (define-constant err-leaderboard-not-found (err u111))
 (define-constant err-not-registered (err u114))
+(define-constant err-achievement-already-claimed (err u115))
+(define-constant err-achievement-not-unlocked (err u116))
+
+(define-constant achievement-first-win u1)
+(define-constant achievement-five-wins u2)
+(define-constant achievement-ten-wins u3)
+(define-constant achievement-first-tournament u4)
+(define-constant achievement-five-tournaments u5)
+(define-constant achievement-veteran u6)
+(define-constant achievement-champion u7)
+(define-constant achievement-undefeated u8)
 
 (define-constant min-entry-fee u1000000)
 (define-constant max-participants u64)
@@ -102,6 +113,24 @@
   }
 )
 
+(define-map player-achievements
+  { player: principal, achievement-id: uint }
+  {
+    unlocked: bool,
+    claimed: bool,
+    unlock-block: uint
+  }
+)
+
+(define-map achievement-rewards
+  uint
+  {
+    name: (string-ascii 30),
+    description: (string-ascii 100),
+    reward-amount: uint
+  }
+)
+
 (define-data-var game-counter uint u0)
 
 (define-private (initialize-game-types)
@@ -111,6 +140,28 @@
     (map-set game-types u3 "Go")
     (map-set game-types u4 "Backgammon")
     (map-set game-types u5 "Chess960")
+    true
+  )
+)
+
+(define-private (initialize-achievements)
+  (begin
+    (map-set achievement-rewards achievement-first-win
+      { name: "First Blood", description: "Win your first game", reward-amount: u100000 })
+    (map-set achievement-rewards achievement-five-wins
+      { name: "Rising Star", description: "Win 5 games total", reward-amount: u250000 })
+    (map-set achievement-rewards achievement-ten-wins
+      { name: "Dominant Force", description: "Win 10 games total", reward-amount: u500000 })
+    (map-set achievement-rewards achievement-first-tournament
+      { name: "Newcomer", description: "Join your first tournament", reward-amount: u50000 })
+    (map-set achievement-rewards achievement-five-tournaments
+      { name: "Regular", description: "Participate in 5 tournaments", reward-amount: u300000 })
+    (map-set achievement-rewards achievement-veteran
+      { name: "Veteran", description: "Participate in 10 tournaments", reward-amount: u750000 })
+    (map-set achievement-rewards achievement-champion
+      { name: "Champion", description: "Win a tournament", reward-amount: u1000000 })
+    (map-set achievement-rewards achievement-undefeated
+      { name: "Invincible", description: "Complete tournament undefeated", reward-amount: u2000000 })
     true
   )
 )
@@ -334,7 +385,7 @@
         rating: (+ (get rating current-stats) (* wins u10) (- (* losses u5)))
       }
     )
-    true
+    (check-and-unlock-achievements player)
   )
 )
 
@@ -503,4 +554,109 @@
   )
 )
 
+(define-private (unlock-achievement (player principal) (achievement-id uint))
+  (let
+    (
+      (achievement-key { player: player, achievement-id: achievement-id })
+      (existing (map-get? player-achievements achievement-key))
+    )
+    (if (is-some existing)
+      false
+      (begin
+        (map-set player-achievements achievement-key
+          {
+            unlocked: true,
+            claimed: false,
+            unlock-block: stacks-block-height
+          }
+        )
+        true
+      )
+    )
+  )
+)
+
+(define-private (check-and-unlock-achievements (player principal))
+  (let
+    (
+      (stats (default-to 
+        { tournaments-played: u0, total-wins: u0, total-losses: u0, total-draws: u0, total-earnings: u0, rating: u1200 }
+        (map-get? player-stats player)))
+      (wins (get total-wins stats))
+      (tourney-count (get tournaments-played stats))
+    )
+    (begin
+      (if (>= wins u1) (unlock-achievement player achievement-first-win) false)
+      (if (>= wins u5) (unlock-achievement player achievement-five-wins) false)
+      (if (>= wins u10) (unlock-achievement player achievement-ten-wins) false)
+      (if (>= tourney-count u1) (unlock-achievement player achievement-first-tournament) false)
+      (if (>= tourney-count u5) (unlock-achievement player achievement-five-tournaments) false)
+      (if (>= tourney-count u10) (unlock-achievement player achievement-veteran) false)
+      true
+    )
+  )
+)
+
+(define-public (claim-achievement (achievement-id uint))
+  (let
+    (
+      (achievement-key { player: tx-sender, achievement-id: achievement-id })
+      (achievement (unwrap! (map-get? player-achievements achievement-key) err-achievement-not-unlocked))
+      (reward-info (unwrap! (map-get? achievement-rewards achievement-id) err-not-found))
+    )
+    (asserts! (get unlocked achievement) err-achievement-not-unlocked)
+    (asserts! (not (get claimed achievement)) err-achievement-already-claimed)
+    (try! (as-contract (stx-transfer? (get reward-amount reward-info) tx-sender (unwrap-panic (get-caller-principal)))))
+    (map-set player-achievements achievement-key
+      (merge achievement { claimed: true })
+    )
+    (ok (get reward-amount reward-info))
+  )
+)
+
+(define-private (get-caller-principal)
+  (ok tx-sender)
+)
+
+(define-public (unlock-champion-achievement (tournament-id uint))
+  (let
+    (
+      (tournament (unwrap! (map-get? tournaments tournament-id) err-not-found))
+      (winner-opt (get winner tournament))
+    )
+    (asserts! (is-eq (get status tournament) u2) err-game-not-finished)
+    (asserts! (is-some winner-opt) err-not-found)
+    (let
+      (
+        (winner (unwrap-panic winner-opt))
+      )
+      (asserts! (is-eq tx-sender winner) err-not-authorized)
+      (unlock-achievement winner achievement-champion)
+      (ok true)
+    )
+  )
+)
+
+(define-read-only (get-achievement (player principal) (achievement-id uint))
+  (map-get? player-achievements { player: player, achievement-id: achievement-id })
+)
+
+(define-read-only (get-achievement-info (achievement-id uint))
+  (map-get? achievement-rewards achievement-id)
+)
+
+(define-read-only (get-player-achievements-list (player principal))
+  (list
+    (get-achievement player achievement-first-win)
+    (get-achievement player achievement-five-wins)
+    (get-achievement player achievement-ten-wins)
+    (get-achievement player achievement-first-tournament)
+    (get-achievement player achievement-five-tournaments)
+    (get-achievement player achievement-veteran)
+    (get-achievement player achievement-champion)
+    (get-achievement player achievement-undefeated)
+  )
+)
+
 (initialize-game-types)
+(initialize-achievements)
