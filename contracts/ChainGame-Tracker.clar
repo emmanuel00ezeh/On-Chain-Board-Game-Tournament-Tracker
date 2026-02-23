@@ -14,6 +14,7 @@
 (define-constant err-not-registered (err u114))
 (define-constant err-achievement-already-claimed (err u115))
 (define-constant err-achievement-not-unlocked (err u116))
+(define-constant err-zero-amount (err u117))
 
 (define-constant achievement-first-win u1)
 (define-constant achievement-five-wins u2)
@@ -656,6 +657,59 @@
     (get-achievement player achievement-champion)
     (get-achievement player achievement-undefeated)
   )
+)
+
+(define-map sponsorships
+  { tournament-id: uint, sponsor: principal }
+  {
+    amount: uint,
+    sponsor-block: uint
+  }
+)
+
+(define-map tournament-sponsor-totals
+  uint
+  {
+    total-sponsors: uint,
+    total-sponsored: uint
+  }
+)
+
+(define-public (sponsor-tournament (tournament-id uint) (amount uint))
+  (let
+    (
+      (tournament (unwrap! (map-get? tournaments tournament-id) err-not-found))
+      (current-block stacks-block-height)
+      (sponsor-key { tournament-id: tournament-id, sponsor: tx-sender })
+      (existing (map-get? sponsorships sponsor-key))
+      (prev-amount (match existing s (get amount s) u0))
+      (totals (default-to { total-sponsors: u0, total-sponsored: u0 }
+                          (map-get? tournament-sponsor-totals tournament-id)))
+    )
+    (asserts! (> amount u0) err-zero-amount)
+    (asserts! (is-eq (get status tournament) u1) err-tournament-closed)
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    (map-set sponsorships sponsor-key
+      { amount: (+ prev-amount amount), sponsor-block: current-block })
+    (map-set tournament-sponsor-totals tournament-id
+      {
+        total-sponsors: (if (is-some existing)
+                          (get total-sponsors totals)
+                          (+ (get total-sponsors totals) u1)),
+        total-sponsored: (+ (get total-sponsored totals) amount)
+      })
+    (map-set tournaments tournament-id
+      (merge tournament { prize-pool: (+ (get prize-pool tournament) amount) }))
+    (ok amount)
+  )
+)
+
+(define-read-only (get-sponsorship (tournament-id uint) (sponsor principal))
+  (map-get? sponsorships { tournament-id: tournament-id, sponsor: sponsor })
+)
+
+(define-read-only (get-tournament-sponsor-totals (tournament-id uint))
+  (map-get? tournament-sponsor-totals tournament-id)
 )
 
 (initialize-game-types)
